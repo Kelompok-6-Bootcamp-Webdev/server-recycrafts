@@ -1,35 +1,59 @@
 import Product from "../models/ProductModel.js";
+import User from "../models/UserModel.js";
 import path from "path";
 import fs from "fs";
 
 export const getProduct = async(req, res) => {
     try {
-        const response = await Product.findAll();
-        res.json(response);
+        const response = await Product.findAll({
+            attributes:['uuid','name', 'desc','price', 'image', 'url'],
+                include:[{
+                    model: User,
+                    attributes:['name','email']
+                }]
+        });
+        res.status(200).json(response);
     } catch (error) {
-        console.log(error.message);
+        res.status(500).json({ msg: error.message });
     }
 }
 
 export const getProductById = async(req, res) => {
     try {
-        const response = await Product.findOne({
+        const product = await Product.findOne({
             where: {
-                id: req.params.id
-            }
+                uuid: req.params.id
+            },
+            attributes:['uuid','name', 'desc','price', 'image', 'url'],
+            include:[{
+                model: User,
+                attributes:['name','email']
+            }]
         });
-        res.json(response);
+        if(!product) return res.status(404).json({msg: "Data tidak ditemukan"});
+        res.status(200).json(product);
     } catch (error) {
-        console.log(error.message);
+        res.status(500).json({msg: error.message});
     }
-
 }
 
-export const saveProduct = (req, res) => {
-    if(req.files === null) return res.status(400).json({msg: "No File Uploaded"});
-    const name = req.body.title;
+export const saveProduct = async (req, res) => {
+    if (req.role !== "admin") {
+        return res.status(403).json({ msg: "Akses terlarang: hanya admin!" });
+    }
+
+    if (!req.files || !req.files.file) {
+        return res.status(400).json({ msg: "No File Uploaded" });
+    }
+
+    const name = req.body.name; 
     const desc = req.body.desc;
     const price = req.body.price;
+
+    if (!name || !desc || !price) {
+        return res.status(400).json({ msg: "Name, description, and price are required" });
+    }
+
     const file = req.files.file;
     const fileSize = file.data.length;
     const ext = path.extname(file.name);
@@ -37,30 +61,42 @@ export const saveProduct = (req, res) => {
     const url = `${req.protocol}://${req.get("host")}/images/${fileName}`;
     const allowedType = ['.png', '.jpg', '.jpeg'];
 
-    if(!allowedType.includes(ext.toLowerCase())) return res.status(422).json({msg: "Invalid Images"});
-    if(fileSize > 5000000) return res.status(422).json({msg: "Image must be less than 5 MB"});
+    if (!allowedType.includes(ext.toLowerCase())) {
+        return res.status(422).json({ msg: "Invalid Images" });
+    }
+    if (fileSize > 5000000) {
+        return res.status(422).json({ msg: "Image must be less than 5 MB" });
+    }
 
-    file.mv(`./public/images/${fileName}`, async(err) => {
-        if(err) return res.status(500).json({msg: err.message});
-        try {
-            await Product.create({
-                name: name, 
-                desc: desc,
-                price: price,
-                image: fileName, 
-                url: url
-            });
-            res.status(201).json({msg: "Product Created Successfully"});
-        } catch (error) {
-            console.log(error.message);
+    try {
+        await file.mv(`./public/images/${fileName}`);
+
+        const newProduct = await Product.create({
+            name: name,
+            desc: desc,
+            price: parseInt(price),
+            image: fileName,
+            url: url,
+            userId: req.userId
+        });
+
+        res.status(201).json({ msg: "Product Created Successfully", product: newProduct });
+    } catch (error) {
+        console.error('Error in saveProduct:', error);
+        if (error.name === 'SequelizeValidationError') {
+            return res.status(400).json({ msg: error.errors.map(e => e.message) });
         }
-    })
+        res.status(500).json({ msg: "An error occurred while saving the product" });
+    }
 }
 
 export const updateProduct = async(req, res) => {
+    if (req.role !== "admin") {
+        return res.status(403).json({ msg: "Akses terlarang: hanya admin yang dapat meng-update produk" });
+    }
     const product = await Product.findOne({
         where:{
-            id: req.params.id
+            uuid: req.params.id
         }
     });
     if(!product) return res.status(404).json({msg: "No Data Found"});
@@ -85,7 +121,7 @@ export const updateProduct = async(req, res) => {
             if(err) return res.status(500).json({msg: err.message});
         });
     }
-    const name = req.body.title;
+    const name = req.body.name;
     const desc = req.body.desc;
     const price = req.body.price;
     const url = `${req.protocol}://${req.get("host")}/images/${fileName}`;
@@ -99,32 +135,35 @@ export const updateProduct = async(req, res) => {
             url: url
         },{
             where:{
-                id: req.params.id
+                id: product.id
             }
         });
         res.status(200).json({msg: "Product Updated Successfuly"});
     } catch (error) {
-        console.log(error.message);
+        res.status(500).json({ msg: error.message });
     }
 }
 
 export const deleteProduct = async(req, res) => {
     const product = await Product.findOne({
         where: {
-            id: req.params.id
+            uuid: req.params.id
         }
     });
     if(!product) return res.status(404).json({msg: "No Data Found"});
+    if (req.role !== "admin") {
+        return res.status(403).json({ msg: "Akses terlarang: hanya admin yang dapat menghapus produk" });
+    }
     try {
         const filepath = `./public/images/${product.image}`;
         fs.unlinkSync(filepath);
         await Product.destroy({
             where:{
-                id: req.params.id
+                id: product.id
             }
         });
         res.status(200).json({msg: "Product Deleted Successfully"});
     } catch (error) {
-        console.log(error.message);
+        res.status(500).json({msg: error.message});
     }
 }
